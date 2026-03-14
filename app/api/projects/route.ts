@@ -1,17 +1,37 @@
-import { kv } from "@vercel/kv";
 import { NextResponse } from "next/server";
 import { v4 as uuidv4 } from "uuid";
+import { sql, ensureTable } from "@/lib/db";
 import type { Project } from "@/lib/types";
 
-const PROJECTS_KEY = "projects";
+function dbRowToProject(row: Record<string, unknown>): Project {
+  return {
+    id: row.id as string,
+    name: row.name as string,
+    status: row.status as Project["status"],
+    jiraTickets: row.jira_tickets as string,
+    notes: row.notes as string,
+    assignee: row.assignee as string,
+    createdAt: (row.created_at as Date).toISOString(),
+    updatedAt: (row.updated_at as Date).toISOString(),
+  };
+}
 
 export async function GET() {
   try {
-    const projects = await kv.get<Project[]>(PROJECTS_KEY);
-    return NextResponse.json(projects ?? []);
-  } catch {
+    await ensureTable();
+    const { rows } = await sql`
+      SELECT * FROM projects ORDER BY updated_at DESC
+    `;
+    return NextResponse.json(rows.map(dbRowToProject));
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    const isConfig = msg.includes("POSTGRES") || msg.includes("connect");
     return NextResponse.json(
-      { error: "Failed to fetch projects" },
+      {
+        error: isConfig
+          ? "Database not configured. Please link a Vercel Postgres store to this project in the Vercel dashboard (Storage → Create → Postgres), then redeploy."
+          : "Failed to fetch projects",
+      },
       { status: 500 }
     );
   }
@@ -19,8 +39,9 @@ export async function GET() {
 
 export async function POST(request: Request) {
   try {
+    await ensureTable();
     const body = await request.json();
-    const { name, status, jiraTickets, notes, assignee } = body;
+    const { name, status, jiraTickets = "", notes = "", assignee = "" } = body;
 
     if (!name || !status) {
       return NextResponse.json(
@@ -29,27 +50,23 @@ export async function POST(request: Request) {
       );
     }
 
-    const existing = await kv.get<Project[]>(PROJECTS_KEY);
-    const projects = existing ?? [];
+    const id = uuidv4();
+    const { rows } = await sql`
+      INSERT INTO projects (id, name, status, jira_tickets, notes, assignee)
+      VALUES (${id}, ${name}, ${status}, ${jiraTickets}, ${notes}, ${assignee})
+      RETURNING *
+    `;
 
-    const newProject: Project = {
-      id: uuidv4(),
-      name,
-      status,
-      jiraTickets: jiraTickets ?? "",
-      notes: notes ?? "",
-      assignee: assignee ?? "",
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-    };
-
-    projects.push(newProject);
-    await kv.set(PROJECTS_KEY, projects);
-
-    return NextResponse.json(newProject, { status: 201 });
-  } catch {
+    return NextResponse.json(dbRowToProject(rows[0]), { status: 201 });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    const isConfig = msg.includes("POSTGRES") || msg.includes("connect");
     return NextResponse.json(
-      { error: "Failed to create project" },
+      {
+        error: isConfig
+          ? "Database not configured. Please link a Vercel Postgres store in the Vercel dashboard."
+          : "Failed to create project",
+      },
       { status: 500 }
     );
   }

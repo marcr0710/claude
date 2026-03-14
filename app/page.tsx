@@ -16,9 +16,13 @@ export default function HomePage() {
   const fetchProjects = useCallback(async () => {
     try {
       const res = await fetch("/api/projects");
-      if (!res.ok) throw new Error("Failed to fetch");
       const data = await res.json();
+      if (!res.ok) {
+        setError(data?.error ?? "Could not load projects. Please refresh.");
+        return;
+      }
       setProjects(data);
+      setError("");
     } catch {
       setError("Could not load projects. Please refresh.");
     } finally {
@@ -39,9 +43,9 @@ export default function HomePage() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(data),
     });
-    if (!res.ok) throw new Error("Failed to add");
-    const created: Project = await res.json();
-    setProjects((prev) => [...prev, created]);
+    const body = await res.json();
+    if (!res.ok) throw new Error(body?.error ?? "Failed to add project");
+    setProjects((prev) => [...prev, body as Project]);
     setShowForm(false);
   }
 
